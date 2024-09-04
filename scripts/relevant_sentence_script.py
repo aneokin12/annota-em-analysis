@@ -197,7 +197,7 @@ if __name__ == "__main__":
         user_annotations = json.load(data_file)
 
     # find relevant and non relevant sentences
-    sentence_prediction_id = "aWxRNfOYcI4paGFxvN4h"
+    sentence_prediction_id = "0R2nbNA2zn5Xd43foBKX" # sentencePrediction ID for David Ayers RQ/T pairing
 
     # set logging to True to print out the results and for debugging
 
