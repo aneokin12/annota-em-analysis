@@ -33,9 +33,13 @@ def extract_user_relevance_array(user_id, research_question_id, transcript_id, l
     transcript_data = db.collection("transcriptlineDatas").where(filter=FieldFilter("__transcriptId", "==", transcript_id)).stream()
 
     for data in transcript_data: # this should only execute once but firebase makes you do it this way ?
-        transcript_line_data = data.to_dict()
-        transcript_line_data = transcript_line_data["lines"]
-        num_lines = transcript_line_data[-1]["__lineNumber"]
+        curr_tld = data.to_dict()["lines"]
+        curr_annotables = [
+            line["__lineNumber"]
+            for line in curr_tld["lines"]
+            if line["type"] == "INTERVIEWEETEXT"
+        ]
+        num_lines = len[curr_annotables]
         user_relevancy_array = [0] * num_lines
     
         if logging:
