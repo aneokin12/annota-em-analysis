@@ -35,7 +35,7 @@ def extract_user_relevance_array(user_id, research_question_id, transcript_id, l
     for data in transcript_data: # this should only execute once but firebase makes you do it this way ?
         curr_tld = data.to_dict()["lines"]
         curr_annotables = [
-            line["__lineNumber"]
+            (line["__lineNumber"], line["text"]) # tuple: (raw line #, text)
             for line in curr_tld["lines"]
             if line["type"] == "INTERVIEWEETEXT"
         ]
