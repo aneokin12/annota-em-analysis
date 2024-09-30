@@ -1,0 +1,18 @@
+# Core Python libraries
+numpy==1.25.0         # or the latest version
+pprintpp==0.4.0       # pprint is a built-in module, but pprintpp enhances its capabilities
+
+# Firebase Admin SDK
+firebase-admin==6.2.0  # or the latest version
+
+# Firebase Functions
+firebase-functions==0.5.0  # Ensure this is the appropriate version for your needs
+
+# Google Cloud Firestore
+google-cloud-firestore==3.9.2  # or the latest version
+
+# Google Auth library
+google-auth==2.22.0    # or the latest version
+
+# Other libraries
+jsonlib-python3==1.6.1 # For JSON operations, if needed explicitly
