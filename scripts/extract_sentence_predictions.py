@@ -51,16 +51,21 @@ def extract_sentence_prediction_snapshot_relevance(sentence_prediction_snapshot_
             log_file.write(f"\nExtracting Sentence Prediction Relevance for Sentence Prediction ID: {sentence_prediction_snapshot_id}\n")
     
     sentence_prediction = db.collection("sentencePredictionSnapshots").document(sentence_prediction_snapshot_id).get()
-    
+    transcript_id = sentence_prediction.to_dict()["__transcriptId"]
+    transcript_lines = db.collection("transcriptlineDatas").where(filter=FieldFilter("__transcriptId", "==", transcript_id)).stream()
+    num_lines = 0
+    for transcript_line in transcript_lines:
+        num_lines = transcript_line.to_dict()["lines"][-1]["__lineNumber"]
+
     if not sentence_prediction.exists:
         print(f"No such sentence prediction snapshot document: {sentence_prediction_snapshot_id}")
         sys.exit()
     
     sentence_prediction_data = sentence_prediction.to_dict()
     sentence_chunks = sentence_prediction_data["_sentenceChunks"]
-    num_lines = sentence_chunks[-1]["end"]
     # binary array to store relevance of each sentence
-    relevance = [0] * num_lines
+    # + 1 to account for 0th line
+    relevance = [-1] * (num_lines + 1)
     for sentence in sentence_chunks:
         start = sentence["start"]
         end = sentence["end"]
@@ -69,8 +74,8 @@ def extract_sentence_prediction_snapshot_relevance(sentence_prediction_snapshot_
             with open(log_filepath, 'a') as log_file:
                 log_file.write(f"Sentence Chunk: {sentence}, start: {start}, end: {end}, relevance: {is_relevant}\n")
         # loop through the sentence chunk and apply its relevancy status to all lines in the chunk
-        # start - 1 because the start index is 1-based?
-        for i in range(start - 1, end):
+        # end + 1 because the start index is 0-based in firebase
+        for i in range(start, end + 1):
             relevance[i] = 1 if is_relevant else 0
             if logging:
                 with open(log_filepath, 'a') as log_file:
