@@ -31,10 +31,8 @@ def extract_user_relevance_array(user_id, research_question_id, transcript_id, l
     
     # get transcript number of lines
     transcript_data = db.collection("transcriptlineDatas").where(filter=FieldFilter("__transcriptId", "==", transcript_id)).stream()
-
     for data in transcript_data: # this should only execute once but firebase makes you do it this way ?
-        transcript_line_data = data.to_dict()
-        transcript_line_data = transcript_line_data["lines"]
+        transcript_line_data = data.to_dict()["lines"]
         num_lines = transcript_line_data[-1]["__lineNumber"]
         user_relevancy_array = [0] * num_lines
     
@@ -78,9 +76,9 @@ if __name__ == "__main__":
     with open(log_filepath, 'w') as log_file:
         log_file.write("Starting extract_user_relevance_array script\n")
 
-    user_id = "VU5I4r8u60VB3NE731mfUp9x7BG3" # neo's user id
+    user_id = "Ywq81LVD5EUzHc49ej02bVFAnqp1"
     research_question_id = "1aIg3CodFAOoxD73ozzl" # rq 2 challenges and barriers
-    transcript_id = "S3TdL6mSCuOFCNG87tMS" # david ayers transcript
+    transcript_id = "f6pGozIjYeuby7PpJ4rj" 
     
     user_relevancy_array = extract_user_relevance_array(user_id, research_question_id, transcript_id, logging=True, log_filepath=log_filepath)
     
