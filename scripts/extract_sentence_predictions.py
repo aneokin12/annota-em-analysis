@@ -54,8 +54,10 @@ def extract_sentence_prediction_snapshot_relevance(sentence_prediction_snapshot_
     transcript_id = sentence_prediction.to_dict()["__transcriptId"]
     transcript_lines = db.collection("transcriptlineDatas").where(filter=FieldFilter("__transcriptId", "==", transcript_id)).stream()
     num_lines = 0
+    line_data = []
     for transcript_line in transcript_lines:
         num_lines = transcript_line.to_dict()["lines"][-1]["__lineNumber"]
+        line_data = transcript_line.to_dict()["lines"]
 
     if not sentence_prediction.exists:
         print(f"No such sentence prediction snapshot document: {sentence_prediction_snapshot_id}")
@@ -76,10 +78,13 @@ def extract_sentence_prediction_snapshot_relevance(sentence_prediction_snapshot_
         # loop through the sentence chunk and apply its relevancy status to all lines in the chunk
         # end + 1 because the start index is 0-based in firebase
         for i in range(start, end + 1):
-            relevance[i] = 1 if is_relevant else 0
-            if logging:
+            if line_data[i]["type"] == "INTERVIEWEETEXT":
+                relevance[i] = 1 if is_relevant else 0
+            if logging and relevance[i] != -1:
                 with open(log_filepath, 'a') as log_file:
                     log_file.write(f"relevance[{i}]: {relevance[i]}\n")
+                    log_file.write(f"line data: {line_data[i]["text"]}\n")
+                    log_file.write(f"line type: {line_data[i]["type"]}\n")
     
     if logging:
         with open(log_filepath, 'a') as log_file:
@@ -97,9 +102,13 @@ if __name__ == "__main__":
     log_filepath = os.path.join(script_dir, 'logging.txt')
     result_file = os.path.join(script_dir, 'relevance_array.txt')
     
-    sentence_prediction_snapshot_id = "uPGKlEduD3kl64r9bVl4"
+    # ids below are for prod db
+    # sentence_prediction_snapshot_id = "uPGKlEduD3kl64r9bVl4"
     research_question_id = "CYHeKZCMMfwQrlUjAGdC"
-    transcript_id = "owpnUQpMArcWOcBgOhHM"
+    transcript_id = "owpnUQpMArcWOcBgOhHM" # david ayers
+    # transcript_id = "bEWXNT0pBf0L8gQjTXHa" # jane smith
+    # transcript_id = "RGcUaOIhqwnFjeDXHUH2" # nathan porter
+    # transcript_id = "BNrQR7LUduj1YFkJeNyL" # emma mccarthy
 
     # clear log file
     with open(log_filepath, 'w') as log_file:
