@@ -61,8 +61,7 @@ def run_hint_em(original_preds, hint_data, task_map):
 
 if __name__ == '__main__':
 
-    inputTensor = remove_zero_slices(np.load('hints.npy', allow_pickle = True))
-    original
+    inputTensor = np.load('hints.npy', allow_pickle = True)
     # total_ann_mat = inputTensor[:, ~np.all(np.isnan(inputTensor), axis=0)]
     preds = run_inference(inputTensor)
 
