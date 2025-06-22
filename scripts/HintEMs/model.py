@@ -40,54 +40,73 @@ def dawid_skene(
     collapse=C_step,
     check_convergence=True,
     tol=0.001,
-    smoothing_method="Laplace",
+    smoothing="Laplace",
     C=True,
-    coeff=0.01,
 ):
-    """
-    Run the Dawid–Skene EM algorithm on an annotation tensor N of shape (I, J, K).
-    
-    Returns a 1D array of hard labels (length I), computed as np.argmax(T, axis=1).
-    """
+
     N = N.astype(np.float64)
     I, J, K = np.shape(N)
-    
-    # Majority Vote Initialization
+
+    # Majority Vote initialization
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         try:
             K_sum = np.sum(N, axis=2)
-            print(K_sum)
             T = K_sum / (np.sum(K_sum, axis=1).reshape(-1, 1))
-        except Exception as e:
-            print("Error during majority vote initialization:", e)
-            raise
+        except:
+            print("JKSums:", np.sum(K_sum, axis=1).reshape(-1, 1))
+            assert False
 
+    # Collapses the probabilities to a single estimated label per task
     if C:
-        T = C_step(T)
-    
+        T = collapse(T)
+
     # EM Algorithm
-    for it in range(max_iter):
-        print(it)
+
+    for i in range(max_iter):
+
+        # Maximization Step:
+
+        # Computes Prior Probability of each class
         p = np.mean(T, axis=0).reshape(-1, 1)
+
+        # Unnormalized Confusion Tensor (J X J X K)
         confusion = np.tensordot(T, N, axes=([0, 0]))
-        confusion = smooth(confusion, smoothing_method, coeff)
+
+        # Smooths the unnormalized confusion to avoid divide-by-zero when normalizing.
+        confusion = smooth(confusion, smoothing, 0.01)
+
+        # Normalizes the Confusion Tensor
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            confusion /= np.repeat(np.sum(confusion, axis=1), J, axis=0).reshape(J, J, K)
+            confusion /= np.repeat(np.sum(confusion, axis=1), J, axis=0).reshape(
+                J, J, K
+            )
+
+        # Expectation Step:
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
+
+            # Compute Log-Likelihood
             log_conf = np.log(confusion)
             num = np.tensordot(N, log_conf, axes=((2, 1), (2, 1)))
-            denom = np.repeat(np.log(np.matmul(np.exp(num), p.reshape(-1, 1))), J, axis=1)
+            denom = np.repeat(
+                np.log(np.matmul(np.exp(num), p.reshape(-1, 1))), J, axis=1
+            )
             log_like = np.log(p.reshape(1, -1)) + num - denom
-            T_new = np.exp(log_like).astype("float64")
+
+        # Translate Log-Likelihoods to Label Probabilities
+        T_new = np.exp(log_like).astype("float64")
+
         if C:
-            T_new = C_step(T_new)
+            T_new = collapse(T_new)
+
         if check_convergence and np.mean(np.abs(T_new - T)) < tol:
             T = T_new
             break
         else:
             T = T_new
 
+    # Return Best-Estimated Labels
     return np.argmax(T, axis=1)
