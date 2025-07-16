@@ -1,165 +1,448 @@
-# generatehints.py
-
-import os
 import numpy as np
+import matplotlib.pyplot as plt
 from model import dawid_skene
-import sampler
+from sampler import (
+    sample_student_global, 
+    sample_student_bootstrap, 
+    sample_student_hier,
+    simulate_response,
+    alpha_global
+)
+from gensynthlabels import generate_synthetic_labels
+from metrics import calculate_all_metrics, print_metrics_summary
 
+def load_initial_tensor():
+    """Load the initial hint tensor from disk."""
+    return np.load('hint_tensor.npy')
 
-def generate_golds(N, positive_rate=0.30, seed=123):
+def get_em_predictions(tensor):
+    """Run Dawid-Skene EM algorithm to get predictions for each task."""
+    predictions = dawid_skene(tensor)
+    return predictions
+
+def generate_hint_for_task(prediction):
+    """Convert EM prediction to a hint (0 = not relevant, 1 = relevant)."""
+    return prediction
+
+def apply_synthetic_hints_once(tensor, ground_truth_labels, sampling_method='global'):
     """
-    Given an input tensor N of shape (I,2,K), produce a synthetic "ground truth"
-    vector y_true of length I, with a Bernoulli(positive_rate) draw for each row.
-    Returns a 1‐D numpy array of 0/1 of length I.
+    Apply synthetic hints to the tensor once.
+    Args:
+        tensor: N x J x K tensor (tasks x labels x students)
+        ground_truth_labels: 1D array of length N, true label for each task
+        sampling_method: 'global', 'bootstrap', or 'hierarchical'
+    Returns:
+        Updated tensor with synthetic hint responses
     """
-    rng = np.random.default_rng(seed)
-    I, two, K = N.shape
-    assert two == 2, "N must be shape (I,2,K)"
-    y_true = rng.binomial(1, positive_rate, size=I)
-    return y_true
+    N, J, K = tensor.shape
+    em_predictions = get_em_predictions(tensor)
+    print(f"EM predictions shape: {em_predictions.shape}")
+    print(f"Sample predictions: {em_predictions[:10]}")
+    updated_tensor = tensor.copy()
+    for task_idx in range(N):
+        hint = generate_hint_for_task(em_predictions[task_idx])
+        true_label = ground_truth_labels[task_idx]
+        print(f"Task {task_idx}: EM prediction = {hint}, True label = {true_label} (0=not relevant, 1=relevant)")
+        for student_idx in range(K):
+            if sampling_method == 'global':
+                q_vec = sample_student_global(alpha_global)
+            elif sampling_method == 'bootstrap':
+                from sampler import df_probs
+                q_vec = sample_student_bootstrap(df_probs)
+            elif sampling_method == 'hierarchical':
+                q_vec = sample_student_hier(alpha_global, kappa=1.0)
+            else:
+                raise ValueError(f"Unknown sampling method: {sampling_method}")
+            # Determine if it is correct to agree (prediction matches ground truth)
+            correct_to_agree = (hint == true_label)
+            response = simulate_response(correct_to_agree, q_vec)
+            if response == 'AGREE':
+                updated_tensor[task_idx, :, student_idx] = 0
+                updated_tensor[task_idx, hint, student_idx] = 1
+            else:
+                updated_tensor[task_idx, :, student_idx] = 0
+                updated_tensor[task_idx, 1 - hint, student_idx] = 1
+    return updated_tensor
 
-
-def correct_action(hint_t, y_label):
+def apply_one_synthetic_edit(tensor, ground_truth_labels, student_idx, sampling_method='global'):
     """
-    Given:
-      - hint_t ∈ {0,1}: 0 = NOT_RELEVANT hint, 1 = MISSED hint
-      - y_label ∈ {0,1}: 1 means “this row truly is relevant,” 0 means “not relevant.”
-    Return the TRUE/“ideal” click on a hint:
-      - If hint_t == 0, the hint is “this line is NOT relevant”:
-          ideal = 'AGREE' if y_label == 0 else 'DISAGREE'
-      - If hint_t == 1, the hint is “this line should have been marked relevant”:
-          ideal = 'AGREE' if y_label == 1 else 'DISAGREE'
+    Perform one synthetic edit: one student responds to a hint on a task where they disagree with the EM prediction.
+    Args:
+        tensor: N x J x K tensor (tasks x labels x students)
+        ground_truth_labels: 1D array of length N, true label for each task
+        student_idx: index of the student to make the edit
+        sampling_method: 'global', 'bootstrap', or 'hierarchical'
+    Returns:
+        updated_tensor: tensor after the edit
+        edited_task_idx: index of the task edited (or None if no edit was made)
     """
-    if hint_t == 0:       # NOT_RELEVANT hint
-        return "AGREE" if (y_label == 0) else "DISAGREE"
-    else:                 # MISSED (relevant) hint
-        return "AGREE" if (y_label == 1) else "DISAGREE"
+    N, J, K = tensor.shape
+    em_predictions = get_em_predictions(tensor)
+    updated_tensor = tensor.copy()
+    for task_idx in range(N):
+        hint = generate_hint_for_task(em_predictions[task_idx])
+        true_label = ground_truth_labels[task_idx]
+        # Find student's current annotation (argmax over labels)
+        student_annotation = np.argmax(tensor[task_idx, :, student_idx])
+        # Only respond if annotation disagrees with EM prediction
+        if student_annotation != hint:
+            # Sample confusion matrix for this student
+            if sampling_method == 'global':
+                q_vec = sample_student_global(alpha_global)
+            elif sampling_method == 'bootstrap':
+                from sampler import df_probs
+                q_vec = sample_student_bootstrap(df_probs)
+            elif sampling_method == 'hierarchical':
+                q_vec = sample_student_hier(alpha_global, kappa=1.0)
+            else:
+                raise ValueError(f"Unknown sampling method: {sampling_method}")
+            correct_to_agree = (hint == true_label)
+            response = simulate_response(correct_to_agree, q_vec)
+            if response == 'AGREE':
+                updated_tensor[task_idx, :, student_idx] = 0
+                updated_tensor[task_idx, hint, student_idx] = 1
+            else:
+                updated_tensor[task_idx, :, student_idx] = 0
+                updated_tensor[task_idx, 1 - hint, student_idx] = 1
+            print(f"Student {student_idx} edited task {task_idx}: disagreed with EM, responded '{response}' (hint={hint}, true_label={true_label})")
+            return updated_tensor, task_idx  # Only one edit per round
+    print(f"Student {student_idx} had no disagreements with EM predictions; no edit made.")
+    return updated_tensor, None
 
-
-def apply_synthetic_round(N, line_map, y_true,
-                          sample_fn,
-                          response_rate=0.30,
-                          random_seed=None):
+def run_until_convergence(tensor, ground_truth_labels, max_rounds=1000, convergence_threshold=5, sampling_method='global'):
     """
-    Perform exactly one “synthetic round” of re‐sampling existing votes in N.
-    - N         : numpy array shape (I, 2, K).  N[i,0,k]==1 means annotator k clicked DISAGREE on row i.
-                   N[i,1,k]==1 means annotator k clicked AGREE on row i.  If both zero, no vote.
-    - line_map  : dict mapping row‐index i → (line_number, hint_type).  hint_type ∈ {0,1}.
-                   We only use hint_type here.
-    - y_true    : length‐I array of {0,1} (ground truth).
-    - sample_fn : a function returning a length‐4 confusion vector q_vec = [p_TN,p_FP,p_FN,p_TP].
-                   Example:  sample_fn = lambda: sampler.sample_student_global(sampler.alpha_global)
-    - response_rate : fraction (0.0–1.0) of *existing votes* to re‐sample (flip or keep).
-    - random_seed: optional int to seed numpy RNG so results are reproducible.
-    Returns a brand‐new copy N_new of shape (I,2,K) with some votes flipped.
+    Run synthetic edit rounds until convergence is detected.
+    
+    Args:
+        tensor: Initial N x J x K tensor
+        ground_truth_labels: 1D array of length N, true label for each task
+        max_rounds: Maximum number of rounds to run
+        convergence_threshold: Number of consecutive rounds with no EM prediction changes to consider converged
+        sampling_method: 'global', 'bootstrap', or 'hierarchical'
+    
+    Returns:
+        final_tensor: Tensor after convergence
+        round_history: List of (round_num, student_idx, task_idx, predictions_changed) tuples
+        converged_round: Round number when convergence was detected (or max_rounds if not converged)
+        metrics_history: List of metric dictionaries for each round
     """
-    if random_seed is not None:
-        np.random.seed(random_seed)
+    N, J, K = tensor.shape
+    current_tensor = tensor.copy()
+    round_history = []
+    metrics_history = []
+    unchanged_rounds = 0
+    previous_predictions = None
+    
+    print(f"Starting convergence run: max_rounds={max_rounds}, convergence_threshold={convergence_threshold}")
+    
+    for round_num in range(max_rounds):
+        # Get current EM predictions
+        current_predictions = get_em_predictions(current_tensor)
+        
+        # Calculate metrics for this round
+        metrics = calculate_all_metrics(current_predictions, ground_truth_labels)
+        metrics_history.append(metrics)
+        
+        # Print metrics every 10 rounds or when predictions change significantly
+        if round_num % 10 == 0 or round_num < 5:
+            print_metrics_summary(current_predictions, ground_truth_labels, round_num)
+        
+        # Check if predictions changed from previous round
+        if previous_predictions is not None:
+            predictions_changed = np.sum(current_predictions != previous_predictions)
+            if predictions_changed == 0:
+                unchanged_rounds += 1
+                print(f"Round {round_num}: No EM prediction changes (unchanged_rounds={unchanged_rounds})")
+            else:
+                unchanged_rounds = 0
+                print(f"Round {round_num}: {predictions_changed} EM predictions changed")
+        else:
+            predictions_changed = 0
+            print(f"Round {round_num}: Initial EM predictions")
+        
+        # Check for convergence
+        if unchanged_rounds >= convergence_threshold:
+            print(f"Convergence detected after {round_num} rounds!")
+            break
+        
+        # Pick a random student for this round
+        student_idx = np.random.randint(0, K)
+        
+        # Apply one synthetic edit
+        updated_tensor, edited_task_idx = apply_one_synthetic_edit(
+            current_tensor, ground_truth_labels, student_idx, sampling_method
+        )
+        
+        # Record the round
+        round_history.append((round_num, student_idx, edited_task_idx, predictions_changed))
+        
+        # Update for next round
+        current_tensor = updated_tensor
+        previous_predictions = current_predictions
+        
+        # Print progress every 10 rounds
+        if round_num % 10 == 0:
+            print(f"Completed {round_num} rounds...")
+    
+    converged_round = round_num if unchanged_rounds >= convergence_threshold else max_rounds
+    
+    return current_tensor, round_history, converged_round, metrics_history
 
-    I, two, K = N.shape
-    assert two == 2, "N must have shape (I,2,K)"
+def plot_metrics_over_rounds(metrics_history, save_path=None):
+    """
+    Plot F1 score, precision, recall, and accuracy over rounds.
+    
+    Args:
+        metrics_history: List of metric dictionaries for each round
+        save_path: Optional path to save the plot
+    """
+    rounds = list(range(len(metrics_history)))
+    
+    # Extract metrics
+    f1_scores = [m['f1'] for m in metrics_history]
+    precision_scores = [m['precision'] for m in metrics_history]
+    recall_scores = [m['recall'] for m in metrics_history]
+    accuracy_scores = [m['accuracy'] for m in metrics_history]
+    
+    # Create the plot
+    plt.figure(figsize=(12, 8))
+    
+    plt.subplot(2, 2, 1)
+    plt.plot(rounds, f1_scores, 'b-', linewidth=2, label='F1 Score')
+    plt.xlabel('Round')
+    plt.ylabel('F1 Score')
+    plt.title('F1 Score Over Rounds')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    plt.subplot(2, 2, 2)
+    plt.plot(rounds, precision_scores, 'g-', linewidth=2, label='Precision')
+    plt.xlabel('Round')
+    plt.ylabel('Precision')
+    plt.title('Precision Over Rounds')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    plt.subplot(2, 2, 3)
+    plt.plot(rounds, recall_scores, 'r-', linewidth=2, label='Recall')
+    plt.xlabel('Round')
+    plt.ylabel('Recall')
+    plt.title('Recall Over Rounds')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    plt.subplot(2, 2, 4)
+    plt.plot(rounds, accuracy_scores, 'purple', linewidth=2, label='Accuracy')
+    plt.xlabel('Round')
+    plt.ylabel('Accuracy')
+    plt.title('Accuracy Over Rounds')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
+    
+    plt.show()
 
-    # 1) Gather all existing (i,j,k) triples where a vote is present:
-    existing_votes = []
-    for i in range(I):
-        ks0 = np.where(N[i, 0, :] == 1)[0]  # indices k who clicked DISAGREE
-        ks1 = np.where(N[i, 1, :] == 1)[0]  # indices k who clicked AGREE
-        for k in ks0:
-            existing_votes.append((i, 0, k))
-        for k in ks1:
-            existing_votes.append((i, 1, k))
+def run_multiple_trials(tensor, ground_truth_labels, num_trials=10, max_rounds=1000, convergence_threshold=20, sampling_method='global'):
+    """
+    Run multiple trials of the synthetic hint convergence process and average the results.
+    
+    Args:
+        tensor: Initial N x J x K tensor
+        ground_truth_labels: 1D array of length N, true label for each task
+        num_trials: Number of trials to run
+        max_rounds: Maximum number of rounds per trial
+        convergence_threshold: Number of consecutive rounds with no EM prediction changes to consider converged
+        sampling_method: 'global', 'bootstrap', or 'hierarchical'
+    
+    Returns:
+        averaged_metrics_history: List of averaged metric dictionaries for each round
+        trial_results: List of (final_tensor, round_history, converged_round, metrics_history) for each trial
+        max_rounds_across_trials: Maximum number of rounds across all trials
+    """
+    print(f"Running {num_trials} trials...")
+    
+    trial_results = []
+    max_rounds_across_trials = 0
+    
+    for trial in range(num_trials):
+        print(f"\n--- Trial {trial + 1}/{num_trials} ---")
+        
+        # Set different random seed for each trial
+        np.random.seed(trial)
+        
+        # Run single trial
+        final_tensor, round_history, converged_round, metrics_history = run_until_convergence(
+            tensor, ground_truth_labels, max_rounds, convergence_threshold, sampling_method
+        )
+        
+        trial_results.append((final_tensor, round_history, converged_round, metrics_history))
+        max_rounds_across_trials = max(max_rounds_across_trials, len(metrics_history))
+        
+        print(f"Trial {trial + 1} completed: {len(round_history)} rounds, converged at {converged_round}")
+    
+    # Calculate averaged metrics across trials
+    print(f"\nCalculating averaged metrics across {num_trials} trials...")
+    averaged_metrics_history = []
+    
+    for round_num in range(max_rounds_across_trials):
+        round_metrics = []
+        
+        for trial_result in trial_results:
+            _, _, _, metrics_history = trial_result
+            
+            # If this trial has data for this round, include it
+            if round_num < len(metrics_history):
+                round_metrics.append(metrics_history[round_num])
+        
+        # Average the metrics for this round across all trials that reached this round
+        if round_metrics:
+            avg_metrics = {}
+            for metric_name in ['f1', 'precision', 'recall', 'accuracy']:
+                values = [m[metric_name] for m in round_metrics]
+                avg_metrics[metric_name] = np.mean(values)
+                avg_metrics[f'{metric_name}_std'] = np.std(values)
+            
+            averaged_metrics_history.append(avg_metrics)
+        else:
+            break
+    
+    print(f"Averaged metrics calculated for {len(averaged_metrics_history)} rounds")
+    
+    return averaged_metrics_history, trial_results, max_rounds_across_trials
 
-    # 2) How many to re‐sample?
-    n_votes_total = len(existing_votes)
-    n_to_change   = int(np.floor(response_rate * n_votes_total))
+def plot_averaged_metrics_over_rounds(averaged_metrics_history, save_path=None, show_std=True):
+    """
+    Plot averaged F1 score, precision, recall, and accuracy over rounds with standard deviation.
+    
+    Args:
+        averaged_metrics_history: List of averaged metric dictionaries for each round
+        save_path: Optional path to save the plot
+        show_std: Whether to show standard deviation bands
+    """
+    rounds = list(range(len(averaged_metrics_history)))
+    
+    # Extract averaged metrics
+    f1_scores = [m['f1'] for m in averaged_metrics_history]
+    precision_scores = [m['precision'] for m in averaged_metrics_history]
+    recall_scores = [m['recall'] for m in averaged_metrics_history]
+    accuracy_scores = [m['accuracy'] for m in averaged_metrics_history]
+    
+    # Extract standard deviations if available
+    f1_stds = [m.get('f1_std', 0) for m in averaged_metrics_history]
+    precision_stds = [m.get('precision_std', 0) for m in averaged_metrics_history]
+    recall_stds = [m.get('recall_std', 0) for m in averaged_metrics_history]
+    accuracy_stds = [m.get('accuracy_std', 0) for m in averaged_metrics_history]
+    
+    # Create the plot
+    plt.figure(figsize=(12, 8))
+    
+    plt.subplot(2, 2, 1)
+    plt.plot(rounds, f1_scores, 'b-', linewidth=2, label='F1 Score')
+    if show_std and any(f1_stds):
+        plt.fill_between(rounds, 
+                        [f1 - std for f1, std in zip(f1_scores, f1_stds)],
+                        [f1 + std for f1, std in zip(f1_scores, f1_stds)],
+                        alpha=0.3, color='blue')
+    plt.xlabel('Round')
+    plt.ylabel('F1 Score')
+    plt.title('Average F1 Score Over Rounds')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    plt.subplot(2, 2, 2)
+    plt.plot(rounds, precision_scores, 'g-', linewidth=2, label='Precision')
+    if show_std and any(precision_stds):
+        plt.fill_between(rounds, 
+                        [p - std for p, std in zip(precision_scores, precision_stds)],
+                        [p + std for p, std in zip(precision_scores, precision_stds)],
+                        alpha=0.3, color='green')
+    plt.xlabel('Round')
+    plt.ylabel('Precision')
+    plt.title('Average Precision Over Rounds')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    plt.subplot(2, 2, 3)
+    plt.plot(rounds, recall_scores, 'r-', linewidth=2, label='Recall')
+    if show_std and any(recall_stds):
+        plt.fill_between(rounds, 
+                        [r - std for r, std in zip(recall_scores, recall_stds)],
+                        [r + std for r, std in zip(recall_scores, recall_stds)],
+                        alpha=0.3, color='red')
+    plt.xlabel('Round')
+    plt.ylabel('Recall')
+    plt.title('Average Recall Over Rounds')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    plt.subplot(2, 2, 4)
+    plt.plot(rounds, accuracy_scores, 'purple', linewidth=2, label='Accuracy')
+    if show_std and any(accuracy_stds):
+        plt.fill_between(rounds, 
+                        [a - std for a, std in zip(accuracy_scores, accuracy_stds)],
+                        [a + std for a, std in zip(accuracy_scores, accuracy_stds)],
+                        alpha=0.3, color='purple')
+    plt.xlabel('Round')
+    plt.ylabel('Accuracy')
+    plt.title('Average Accuracy Over Rounds')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Averaged metrics plot saved to {save_path}")
+    
+    plt.show()
 
-    # 3) Pick a random subset of those to re‐sample
-    chosen_indices = np.random.choice(n_votes_total,
-                                      size=n_to_change,
-                                      replace=False)
-    chosen_pairs = [existing_votes[idx] for idx in chosen_indices]
+def main():
+    print("Loading initial tensor...")
+    initial_tensor = load_initial_tensor()
+    print(f"Initial tensor shape: {initial_tensor.shape}")
+    print(f"Initial total annotations: {np.sum(initial_tensor)}")
+    
+    print("\nGenerating synthetic ground truth labels...")
+    ground_truth_labels = generate_synthetic_labels(initial_tensor)
+    print(f"Ground truth label counts: {np.bincount(ground_truth_labels)}")
+    print(f"Percentage relevant: {np.mean(ground_truth_labels)*100:.1f}%")
 
-    # 4) Copy N → N_new
-    N_new = N.copy()
-
-    # 5) For each chosen (i,j_old,k), roll a new click via a synthetic student
-    flips = 0
-    for (i, j_old, k) in chosen_pairs:
-        # (a) Look up hint_type from line_map[i]
-        _, hint_t = line_map[i]
-        y_label   = y_true[i]
-        ideal_click = correct_action(hint_t, y_label)
-
-        # (b) Sample one confusion‐vector q_vec = [p_TN,p_FP,p_FN,p_TP]
-        q_vec = sample_fn()
-
-        # (c) Use sampler.simulate_response to get either 'AGREE' or 'DISAGREE'
-        #     Pass `ideal_click == 'AGREE'` as boolean true_is_relevant
-        new_click = sampler.simulate_response(ideal_click == "AGREE", q_vec)
-
-        # (d) Convert new_click → j_new (0 for DISAGREE, 1 for AGREE)
-        j_new = 1 if new_click == "AGREE" else 0
-
-        # (e) If j_new differs from j_old, flip bits in N_new
-        if j_new != j_old:
-            N_new[i, j_old, k] = 0
-            N_new[i, j_new, k] = 1
-            flips += 1
-        # If j_new == j_old, leave that vote unchanged
-
-    print(f"Synthetic round: flipped {flips} out of {n_to_change} sampled votes.")
-    return N_new
-
-
-# ─────────────────────────────────────────────────────────────────
-#  Main entry point
-# ─────────────────────────────────────────────────────────────────
+    # Run multiple trials
+    print("\nRunning multiple trials...")
+    averaged_metrics_history, trial_results, max_rounds = run_multiple_trials(
+        initial_tensor, ground_truth_labels, num_trials=5, max_rounds=1000, convergence_threshold=20
+    )
+    
+    # Show summary statistics
+    print(f"\nTrial Summary:")
+    print(f"Number of trials: {len(trial_results)}")
+    print(f"Max rounds across trials: {max_rounds}")
+    
+    # Calculate average convergence round
+    convergence_rounds = [trial_result[2] for trial_result in trial_results]
+    avg_convergence = np.mean(convergence_rounds)
+    std_convergence = np.std(convergence_rounds)
+    print(f"Average convergence round: {avg_convergence:.1f} ± {std_convergence:.1f}")
+    
+    # Show final averaged metrics
+    if averaged_metrics_history:
+        final_avg_metrics = averaged_metrics_history[-1]
+        print(f"\nFinal Averaged Metrics:")
+        print(f"F1: {final_avg_metrics['f1']:.3f} ± {final_avg_metrics.get('f1_std', 0):.3f}")
+        print(f"Precision: {final_avg_metrics['precision']:.3f} ± {final_avg_metrics.get('precision_std', 0):.3f}")
+        print(f"Recall: {final_avg_metrics['recall']:.3f} ± {final_avg_metrics.get('recall_std', 0):.3f}")
+        print(f"Accuracy: {final_avg_metrics['accuracy']:.3f} ± {final_avg_metrics.get('accuracy_std', 0):.3f}")
+    
+    # Plot averaged metrics over rounds
+    print(f"\nPlotting averaged metrics over {len(averaged_metrics_history)} rounds...")
+    plot_averaged_metrics_over_rounds(averaged_metrics_history, save_path='averaged_metrics_over_rounds.png')
+    
+    return averaged_metrics_history, trial_results
 
 if __name__ == "__main__":
-    here = os.path.dirname(os.path.realpath(__file__))
-
-    # 1) Load the original hint‐vote tensor (I,2,K)
-    tensor_path = os.path.join(here, "hint_tensor.npy")
-    N_orig = np.load(tensor_path)       # shape: (I,2,K)
-    I, two, K = N_orig.shape
-    assert two == 2
-
-    # 2) Load the line_map that you saved earlier
-    #    (should be a dict or array of length I mapping i → (line_no, hint_type)).
-    lm_path = os.path.join(here, "line_map.npy")
-    line_map = np.load(lm_path, allow_pickle=True).item()
-    assert len(line_map) == I
-
-    # 3) Generate a synthetic “gold” vector y_true of length I
-    y_true = generate_golds(N_orig, positive_rate=0.30, seed=123)
-    assert len(y_true) == I
-
-    # 4) Choose which sampler to use.  For example:
-    #    – Global Dirichlet student:  sample_fn = lambda: sampler.sample_student_global(sampler.alpha_global)
-    #    – Bootstrapped real student: sample_fn = lambda: sampler.sample_student_bootstrap(sampler.df_probs)
-    #    – Hierarchical:              sample_fn = lambda: sampler.sample_student_hier(sampler.alpha_global, kappa=0.5)
-    sample_fn = lambda: sampler.sample_student_global(sampler.alpha_global)
-
-    # 5) Perform one synthetic “round” of vote‐flipping at 30% re‐sampling rate
-    N_synth = apply_synthetic_round(
-        N=N_orig,
-        line_map=line_map,
-        y_true=y_true,
-        sample_fn=sample_fn,
-        response_rate=0.30,
-        random_seed=42
-    )
-
-    # 6) Re‐run Dawid–Skene EM on the new tensor
-    print("Running Dawid–Skene EM on synthetic tensor …")
-    em_preds = dawid_skene(N_synth)
-    print("→ EM returned", em_preds.shape, "hard labels.")
-
-    # 7) Save outputs if desired
-    out_tensor_path = os.path.join(here, "hint_tensor_synth.npy")
-    np.save(out_tensor_path, N_synth)
-    print("Saved synthetic tensor to", out_tensor_path)
-
-    out_em_path = os.path.join(here, "em_preds_synth.npy")
-    np.save(out_em_path, em_preds)
-    print("Saved new EM predictions (length I) to", out_em_path)
+    main()

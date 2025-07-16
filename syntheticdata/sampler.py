@@ -10,7 +10,7 @@ import pandas as pd
 #    where each 4‐tuple is (TN, FP, FN, TP).
 # ────────────────────────────────────────────────────────────────
 
-CONFPATH = "/Users/saminthachandrasiri/Annota/annota-v2-cloud/functions/py-functions/student_confusions.npy"    # adjust path if needed
+CONFPATH = "/Users/saminthachandrasiri/Research/Annota/annota-v2-cloud/functions/py-functions/student_confusions.npy"
 
 # Load the dictionary { uid: (TN,FP,FN,TP), … }
 conf_dict = np.load(CONFPATH, allow_pickle=True).item()
@@ -83,7 +83,6 @@ def simulate_response(true_is_relevant, q_vec):
         # “true_is_not_relevant => correct action = DISAGREE => AGREE only if FP”
         p_agree = q_vec[1]
     return "AGREE" if rng.random() < p_agree else "DISAGREE"
-
 
 # ────────────────────────────────────────────────────────────────
 # 4) Expose objects for import
