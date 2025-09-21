@@ -24,6 +24,8 @@ df_counts = (
       .astype(int)
 )
 
+print(df_counts)
+
 
 
 alpha_global = df_counts.sum(axis=0).values + 1
@@ -52,7 +54,7 @@ def sample_student_bootstrap(df_probs):
     """
     return df_probs.sample(1, replace=True).values.flatten()
 
-def sample_student_hier(alpha0, kappa=1.0):
+def sample_student_hier(alpha0, kappa=.5):
     """
     Option C – hierarchical: first draw α_i ~ Gamma(shape=alpha0, scale=1/kappa)
     component‐wise, then draw q_i ~ Dirichlet(α_i).
@@ -63,25 +65,25 @@ def sample_student_hier(alpha0, kappa=1.0):
     # Then draw Dirichlet(alpha_i)
     return np.random.default_rng().dirichlet(alpha_i)
 
-def simulate_response(true_is_relevant, q_vec):
+def simulate_response(should_agree, q_vec):
     """
+    
     Given:
-      - true_is_relevant: Boolean (True means the correct action is “AGREE”).
+      - shuold_agree: Boolean (True means the correct action is “AGREE”).
       - q_vec: length‐4 confusion vector [p_TN, p_FP, p_FN, p_TP], summing to 1.
         Indices:
-          q_vec[0] = P(click DISAGREE | true is NOT relevant)      = TN
-          q_vec[1] = P(click AGREE  | true is NOT relevant)      = FP
-          q_vec[2] = P(click DISAGREE | true is relevant)        = FN
-          q_vec[3] = P(click AGREE  | true is relevant)          = TP
+          q_vec[0] = P(click DISAGREE | should_agree = False)      = TN
+          q_vec[1] = P(click AGREE  | should_agree = False)      = FP
+          q_vec[2] = P(click DISAGREE | should_agree = True)        = FN
+          q_vec[3] = P(click AGREE  | should_agree = True)          = TP
     Returns: the string 'AGREE' or 'DISAGREE', rolled according to q_vec.
     """
+    # print(f"q_vec: {q_vec}")
     rng = np.random.default_rng()
-    if true_is_relevant:
-        # “true_is_relevant => correct action = AGREE => use TP prob for AGREE”
-        p_agree = q_vec[3]
+    if should_agree:
+        p_agree = q_vec[3] / (q_vec[2] + q_vec[3])  # Normalize
     else:
-        # “true_is_not_relevant => correct action = DISAGREE => AGREE only if FP”
-        p_agree = q_vec[1]
+        p_agree = q_vec[1] / (q_vec[0] + q_vec[1])  # Normalize
     return "AGREE" if rng.random() < p_agree else "DISAGREE"
 
 # ────────────────────────────────────────────────────────────────
